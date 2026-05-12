@@ -21,6 +21,9 @@ from typing import Any
 import streamlit as st
 from dotenv import load_dotenv
 
+from dataclasses import asdict
+from uuid import uuid4
+
 from agent import brief as brief_mod
 from agent import edit as edit_mod
 from agent import refs as refs_mod
@@ -33,6 +36,7 @@ from agent.common import (
     Quality,
     normalize_hex,
 )
+from agent.store import SupabaseStore
 
 
 load_dotenv()
@@ -99,6 +103,50 @@ def _reset_tab(prefix: str) -> None:
             st.session_state[k] = (
                 [] if isinstance(DEFAULT_STATE[k], list) else DEFAULT_STATE[k]
             )
+
+
+# ── Persistenza Supabase (cross-agent storage) ─────────────────────
+
+
+def _store() -> SupabaseStore | None:
+    if "_supabase_store" not in st.session_state:
+        try:
+            st.session_state._supabase_store = SupabaseStore.from_env()
+        except Exception:
+            st.session_state._supabase_store = None
+    return st.session_state._supabase_store
+
+
+def _persist_image(
+    *,
+    subtype: str,
+    title: str,
+    image_bytes: bytes,
+    payload: dict,
+    preview: str,
+    metadata: dict,
+    session_id: str | None,
+) -> str | None:
+    """Best-effort save su Supabase. Ritorna l'URL pubblico dell'immagine,
+    o None se Supabase non e` configurato / il save fallisce."""
+    store = _store()
+    if store is None:
+        return None
+    try:
+        saved = store.save_image_output(
+            agent_type="designer",
+            subtype=subtype,
+            title=title,
+            image_bytes=image_bytes,
+            payload=payload,
+            preview=preview,
+            metadata=metadata,
+            source_session_id=session_id,
+        )
+        return saved.image_url
+    except Exception as e:
+        st.toast(f"Salvataggio Supabase fallito: {e}", icon="⚠️")
+        return None
 
 
 # ── Sidebar (brand, palette, reference, quality) ───────────────────
@@ -399,10 +447,39 @@ def _render_visual_ads_tab(sidebar: dict[str, Any]) -> None:
                 return
 
         # Render immagini in sequenza (gpt-image-1 e` lento)
+        session_id = uuid4().hex
         items = []
-        for b in briefs:
+        for idx, b in enumerate(briefs):
             img = _trigger_render(brief=b, fmt=fmt, quality=sidebar["quality"])
-            items.append({"brief": b, "image": img})
+            image_url = None
+            if img is not None:
+                image_url = _persist_image(
+                    subtype="visual_ad",
+                    title=(
+                        f"Visual ad #{idx + 1} — {b.concept[:80]}"
+                        + (f" · {promise}" if promise else "")
+                    ),
+                    image_bytes=img.image_bytes,
+                    payload={
+                        "brief": asdict(b),
+                        "fmt": fmt,
+                        "size": img.size,
+                        "quality": img.quality,
+                        "promise": promise,
+                    },
+                    preview=b.concept,
+                    metadata={
+                        "use_case": "visual_ad",
+                        "fmt": fmt,
+                        "text_mode": text_mode,
+                        "target_audience": sidebar["target_audience"],
+                        "brand_voice": sidebar["brand_voice"],
+                        "brand_visual": sidebar["brand_visual"],
+                        "palette_hex": list(sidebar["palette_hex"]),
+                    },
+                    session_id=session_id,
+                )
+            items.append({"brief": b, "image": img, "supabase_url": image_url})
 
         st.session_state.ads_items = items
         st.session_state.ads_inputs = {
@@ -419,6 +496,7 @@ def _render_visual_ads_tab(sidebar: dict[str, Any]) -> None:
             "palette_hex": sidebar["palette_hex"],
             "references_blob": st.session_state.ref_blob,
             "quality": sidebar["quality"],
+            "session_id": session_id,
         }
         st.rerun()
 
@@ -523,10 +601,35 @@ def _render_landing_tab(sidebar: dict[str, Any]) -> None:
                 st.caption(traceback.format_exc())
                 return
 
+        session_id = uuid4().hex
         items = []
-        for b in briefs:
+        for idx, b in enumerate(briefs):
             img = _trigger_render(brief=b, fmt=fmt, quality=sidebar["quality"])
-            items.append({"brief": b, "image": img})
+            image_url = None
+            if img is not None:
+                image_url = _persist_image(
+                    subtype="landing_image",
+                    title=f"Landing image #{idx + 1} — {b.concept[:80]}",
+                    image_bytes=img.image_bytes,
+                    payload={
+                        "brief": asdict(b),
+                        "fmt": fmt,
+                        "size": img.size,
+                        "quality": img.quality,
+                    },
+                    preview=b.concept,
+                    metadata={
+                        "use_case": "landing",
+                        "fmt": fmt,
+                        "text_mode": text_mode,
+                        "target_audience": sidebar["target_audience"],
+                        "brand_voice": sidebar["brand_voice"],
+                        "brand_visual": sidebar["brand_visual"],
+                        "palette_hex": list(sidebar["palette_hex"]),
+                    },
+                    session_id=session_id,
+                )
+            items.append({"brief": b, "image": img, "supabase_url": image_url})
 
         st.session_state.landing_items = items
         st.session_state.landing_inputs = {
@@ -543,6 +646,7 @@ def _render_landing_tab(sidebar: dict[str, Any]) -> None:
             "palette_hex": sidebar["palette_hex"],
             "references_blob": st.session_state.ref_blob,
             "quality": sidebar["quality"],
+            "session_id": session_id,
         }
         st.rerun()
 
