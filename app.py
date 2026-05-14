@@ -36,6 +36,7 @@ from agent.common import (
     Quality,
     normalize_hex,
 )
+from agent.orch_link import linked_project_id, save_to_project_button, sidebar_project_picker
 from agent.store import SupabaseStore
 
 
@@ -269,6 +270,8 @@ def _sidebar() -> dict[str, Any]:
         index=1,  # medium
         key="_sb_quality",
     )
+
+    sidebar_project_picker()
 
     if st.sidebar.button("🔄 Reset totale", use_container_width=True):
         for k in list(DEFAULT_STATE):
@@ -708,6 +711,21 @@ def _render_results_panel(
                         key=f"{tab_prefix}_dl_{i}",
                         use_container_width=True,
                     )
+                    # Cross-app: salva nel progetto orchestrator collegato
+                    if linked_project_id() and item.get("supabase_url"):
+                        save_to_project_button(
+                            agent_slug="graphic",
+                            output={
+                                "image_url": item["supabase_url"],
+                                "size": image.size,
+                                "quality": image.quality,
+                                "brief": asdict(brief) if hasattr(brief, "__dataclass_fields__") else brief,
+                                "variant_idx": i,
+                            },
+                            user_input={"tab": tab_prefix, "variant_idx": i},
+                            label=f"🎯 Approva variante #{i+1} per progetto",
+                            key_suffix=f"{tab_prefix}_v{i}",
+                        )
                 else:
                     st.warning(
                         "Immagine non generata (errore al render). Usa "
