@@ -118,6 +118,48 @@ def _store() -> SupabaseStore | None:
     return st.session_state._supabase_store
 
 
+def _format_archive_ts(iso_string: str) -> str:
+    try:
+        from datetime import datetime as _dt
+        return _dt.fromisoformat(iso_string.replace("Z", "+00:00")).strftime("%d/%m %H:%M")
+    except Exception:
+        return iso_string[:16]
+
+
+def _render_archive_sidebar() -> None:
+    store = _store()
+    st.sidebar.divider()
+    st.sidebar.header("📚 Archivio visual")
+    if store is None:
+        st.sidebar.caption(
+            "Archivio disabilitato: mancano `SUPABASE_URL` e `SUPABASE_SECRET_KEY`."
+        )
+        return
+    try:
+        outputs = store.list_recent_outputs(agent_type="designer", limit=30)
+    except Exception as e:
+        st.sidebar.error(f"Errore archivio: {e}")
+        return
+    if not outputs:
+        st.sidebar.caption("_Nessun visual salvato ancora._")
+        return
+    for o in outputs:
+        ts = _format_archive_ts(o.get("created_at", ""))
+        title = (o.get("title") or "(senza titolo)")[:60]
+        with st.sidebar.expander(f"{ts} · {title}"):
+            if (url := o.get("image_url")):
+                st.image(url, use_container_width=True)
+            meta = o.get("metadata") or {}
+            st.caption(
+                f"`{o.get('subtype', '?')}` · "
+                f"fmt={meta.get('fmt', '?')}"
+            )
+            if (preview := o.get("preview")):
+                st.text(preview[:200])
+            with st.expander("Payload JSON"):
+                st.json(o.get("payload") or {})
+
+
 def _persist_image(
     *,
     subtype: str,
@@ -272,6 +314,7 @@ def _sidebar() -> dict[str, Any]:
     )
 
     sidebar_project_picker()
+    _render_archive_sidebar()
 
     if st.sidebar.button("🔄 Reset totale", use_container_width=True):
         for k in list(DEFAULT_STATE):
